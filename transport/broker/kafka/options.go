@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/IBM/sarama"
-	"github.com/lengocson131002/go-clean-core/transport/broker"
+	"github.com/lengocson131002/go-clean/pkg/transport/broker"
 )
 
 var (
@@ -12,10 +12,7 @@ var (
 	DefaultClusterConfig = sarama.NewConfig()
 )
 
-// Config for publisher
 type brokerConfigKey struct{}
-
-// Config for subscriber
 type clusterConfigKey struct{}
 
 func BrokerConfig(c *sarama.Config) broker.BrokerOption {
@@ -37,4 +34,19 @@ type subscribeConfigKey struct{}
 
 func SubscribeConfig(c *sarama.Config) broker.SubscribeOption {
 	return setSubscribeOption(subscribeConfigKey{}, c)
+}
+
+type asyncProduceErrorKey struct{}
+type asyncProduceSuccessKey struct{}
+
+func AsyncProducer(errors chan<- *sarama.ProducerError, successes chan<- *sarama.ProducerMessage) broker.BrokerOption {
+	// set default opt
+	var opt = func(options *broker.BrokerOptions) {}
+	if successes != nil {
+		opt = setBrokerOption(asyncProduceSuccessKey{}, successes)
+	}
+	if errors != nil {
+		opt = setBrokerOption(asyncProduceErrorKey{}, errors)
+	}
+	return opt
 }

@@ -7,17 +7,15 @@ import (
 	"os"
 
 	"github.com/IBM/sarama"
-	"github.com/lengocson131002/go-clean-core/transport/broker"
+	"github.com/lengocson131002/go-clean/pkg/transport/broker"
 )
 
 type KafkaBrokerConfig struct {
-	Addresses     []string
-	ConsumerGroup string
+	Addresses []string
 
 	SASLEnabled   bool
 	SASLUser      string
 	SASLPassword  string
-	SASLHandshake bool
 	SASLAlgorithm string
 
 	TLSEnabled        bool
@@ -53,7 +51,7 @@ func createTLSConfiguration(certFile string, keyFile string, caFile string, skip
 	return t, nil
 }
 
-func CreateKafkaBroker(cfg *KafkaBrokerConfig, opts ...broker.BrokerOption) (broker.Broker, error) {
+func GetKafkaBroker(cfg *KafkaBrokerConfig, opts ...broker.BrokerOption) (broker.Broker, error) {
 	conf := sarama.NewConfig()
 	conf.Producer.Retry.Max = 1
 	conf.Producer.RequiredAcks = sarama.WaitForAll
@@ -103,4 +101,5 @@ func CreateKafkaBroker(cfg *KafkaBrokerConfig, opts ...broker.BrokerOption) (bro
 		ClusterConfig(conf))
 
 	return NewKafkaBroker(opts...), nil
+
 }

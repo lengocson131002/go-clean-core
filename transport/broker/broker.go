@@ -10,6 +10,7 @@ type Broker interface {
 	Connect() error
 	Disconnect() error
 	Publish(topic string, m *Message, opts ...PublishOption) error
+	PublishAndReceive(topic string, m *Message, opts ...PublishOption) (*Message, error)
 	Subscribe(topic string, h Handler, opts ...SubscribeOption) (Subscriber, error)
 	String() string
 }
@@ -27,9 +28,16 @@ type Message struct {
 
 // Event is given to a subscription handler for processing.
 type Event interface {
+	// return event's topic
 	Topic() string
+
+	// return event's message
 	Message() *Message
+
+	// mark event as processed
 	Ack() error
+
+	// return error if event has error occurred
 	Error() error
 }
 

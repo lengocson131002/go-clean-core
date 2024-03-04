@@ -1,5 +1,11 @@
 package broker
 
+import (
+	"errors"
+
+	dErrors "github.com/lengocson131002/go-clean/pkg/errors"
+)
+
 type Result struct {
 	Status  int         `json:"-"`       // Http status code
 	Code    string      `json:"code"`    // Error code
@@ -15,14 +21,16 @@ type Response[T any] struct {
 var (
 	DefaultSuccessResponse = Response[interface{}]{
 		Result: Result{
+			Status:  200,
 			Code:    "0",
 			Message: "Success",
 		},
 		Data: nil,
 	}
 
-	DefaultErrorResponse = Response[interface{}]{
+	DefaultFailureResponse = Response[interface{}]{
 		Result: Result{
+			Status:  500,
 			Code:    "1",
 			Message: "Internal Server Error",
 		},
@@ -30,9 +38,29 @@ var (
 )
 
 func SuccessResponse[T any](data T) Response[T] {
-	var defRes = DefaultSuccessResponse
+	defRes := DefaultSuccessResponse
 	return Response[T]{
 		Result: defRes.Result,
 		Data:   data,
 	}
+}
+
+func FailureResponse(err error) Response[interface{}] {
+	fRes := DefaultFailureResponse
+	if err == nil {
+		return fRes
+	}
+
+	fRes.Result.Message = err.Error()
+	var businessErr *dErrors.DomainError
+
+	if errors.As(err, &businessErr) {
+		fRes.Result = Result{
+			Status:  businessErr.Status,
+			Code:    businessErr.Code,
+			Message: businessErr.Message,
+		}
+	}
+
+	return fRes
 }

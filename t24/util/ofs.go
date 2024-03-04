@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lengocson131002/go-clean-core/t24/response/model"
+	"github.com/lengocson131002/go-clean/pkg/t24/response/model"
 )
 
 // IsNullOrEmpty checks if a string is null or empty

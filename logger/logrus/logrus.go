@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/lengocson131002/go-clean-core/logger"
+	"github.com/lengocson131002/go-clean/pkg/logger"
 	"github.com/sirupsen/logrus"
 )
 

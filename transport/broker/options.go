@@ -3,8 +3,9 @@ package broker
 import (
 	"context"
 	"crypto/tls"
+	"time"
 
-	"github.com/lengocson131002/go-clean-core/logger"
+	"github.com/lengocson131002/go-clean/pkg/logger"
 )
 
 type BrokerOption func(*BrokerOptions)
@@ -57,12 +58,26 @@ func WithBrokerTLSConfig(t *tls.Config) BrokerOption {
 type PublishOption func(*PublishOptions)
 
 type PublishOptions struct {
-	Context context.Context
+	Context      context.Context
+	Timeout      time.Duration
+	ReplyToTopic string
 }
 
 func WithPublishContext(ctx context.Context) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.Context = ctx
+	}
+}
+
+func WithPublishTimeout(timeout time.Duration) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Timeout = timeout
+	}
+}
+
+func WithPublishReplyToTopic(replyToTopic string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.ReplyToTopic = replyToTopic
 	}
 }
 

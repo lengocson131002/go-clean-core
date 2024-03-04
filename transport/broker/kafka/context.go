@@ -3,7 +3,7 @@ package kafka
 import (
 	"context"
 
-	"github.com/lengocson131002/go-clean-core/transport/broker"
+	"github.com/lengocson131002/go-clean/pkg/transport/broker"
 )
 
 // setSubscribeOption returns a function to setup a context with given value

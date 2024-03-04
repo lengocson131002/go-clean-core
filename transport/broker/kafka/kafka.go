@@ -2,25 +2,39 @@ package kafka
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
-	"github.com/lengocson131002/go-clean-core/logger"
-	"github.com/lengocson131002/go-clean-core/transport/broker"
+	"github.com/lengocson131002/go-clean/pkg/logger"
+	"github.com/lengocson131002/go-clean/pkg/transport/broker"
+)
+
+var (
+	CorrelationIdHeader = "correlationId"
+	ReplyToTopicHeader  = "replyToTopic"
+	RequestReplyTimeout = time.Second * 10
 )
 
 type kBroker struct {
 	addrs []string
 
-	c sarama.Client       // broker connection client
-	p sarama.SyncProducer // producer
+	c  sarama.Client        // broker connection client
+	p  sarama.SyncProducer  // sync producer
+	ap sarama.AsyncProducer // async producer
 
-	sc []sarama.Client // subscription connection clients
+	cgs []sarama.ConsumerGroup
 
 	connected bool
 	scMutex   sync.Mutex
 	opts      broker.BrokerOptions
+
+	// request-reply patterns
+	resps           map[string](chan *broker.Message) // response channels. key: message correlation ID, value: response body
+	respSubscribers map[string]broker.Subscriber      // response subscribers. key: response topic, value: response subscriber
 }
 
 func NewKafkaBroker(opts ...broker.BrokerOption) broker.Broker {
@@ -52,6 +66,7 @@ func NewKafkaBroker(opts ...broker.BrokerOption) broker.Broker {
 }
 
 type subscriber struct {
+	k    *kBroker
 	cg   sarama.ConsumerGroup
 	t    string
 	opts broker.SubscribeOptions
@@ -92,7 +107,22 @@ func (s *subscriber) Topic() string {
 }
 
 func (s *subscriber) Unsubscribe() error {
-	return s.cg.Close()
+	if err := s.cg.Close(); err != nil {
+		return err
+	}
+
+	k := s.k
+	k.scMutex.Lock()
+	defer k.scMutex.Unlock()
+
+	for i, cg := range k.cgs {
+		if cg == s.cg {
+			k.cgs = append(k.cgs[:i], k.cgs[i+1:]...)
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func (k *kBroker) Address() string {
@@ -126,17 +156,59 @@ func (k *kBroker) Connect() error {
 		return err
 	}
 
-	p, err := sarama.NewSyncProducerFromClient(c)
-	if err != nil {
-		return err
+	var (
+		ap                   sarama.AsyncProducer
+		p                    sarama.SyncProducer
+		errChan, successChan = k.getAsyncProduceChan()
+	)
+
+	// Because error chan must require, so only error chan
+	// If set the error chan, will use async produce
+	// else use sync produce
+	// only keep one client resource, is c variable
+	if errChan != nil {
+		ap, err = sarama.NewAsyncProducerFromClient(c)
+		if err != nil {
+			return err
+		}
+		// When the ap closed, the Errors() & Successes() channel will be closed
+		// So the goroutine will auto exit
+		go func() {
+			for v := range ap.Errors() {
+				errChan <- v
+			}
+		}()
+
+		if successChan != nil {
+			go func() {
+				for v := range ap.Successes() {
+					successChan <- v
+				}
+			}()
+		}
+	} else {
+		p, err = sarama.NewSyncProducerFromClient(c)
+		if err != nil {
+			return err
+		}
 	}
 
 	k.scMutex.Lock()
 	k.c = c
-	k.p = p
-	k.sc = make([]sarama.Client, 0)
+	if p != nil {
+		k.p = p
+	}
+	if ap != nil {
+		k.ap = ap
+	}
+	k.cgs = make([]sarama.ConsumerGroup, 0)
 	k.connected = true
-	defer k.scMutex.Unlock()
+
+	// request-reply pattern
+	k.resps = make(map[string]chan *broker.Message)
+	k.respSubscribers = make(map[string]broker.Subscriber)
+
+	k.scMutex.Unlock()
 
 	return nil
 }
@@ -144,15 +216,25 @@ func (k *kBroker) Connect() error {
 func (k *kBroker) Disconnect() error {
 	k.scMutex.Lock()
 	defer k.scMutex.Unlock()
-	for _, client := range k.sc {
-		client.Close()
+	for _, consumer := range k.cgs {
+		consumer.Close()
 	}
-	k.sc = nil
-	k.p.Close()
+	k.cgs = nil
+	if k.p != nil {
+		k.p.Close()
+	}
+	if k.ap != nil {
+		k.ap.Close()
+	}
 	if err := k.c.Close(); err != nil {
 		return err
 	}
 	k.connected = false
+
+	// request-reply pattern
+	k.resps = nil
+	k.respSubscribers = nil
+
 	return nil
 }
 
@@ -179,12 +261,118 @@ func (k *kBroker) Options() broker.BrokerOptions {
 }
 
 func (k *kBroker) Publish(topic string, msg *broker.Message, opts ...broker.PublishOption) error {
-	_, _, err := k.p.SendMessage(&sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.StringEncoder(msg.Body),
-	})
+	options := broker.PublishOptions{}
 
-	return err
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	return k.sendMessage(topic, msg)
+}
+
+func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...broker.PublishOption) (*broker.Message, error) {
+	options := broker.PublishOptions{
+		ReplyToTopic: fmt.Sprintf("%s.reply", topic),
+		Timeout:      RequestReplyTimeout,
+	}
+
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	// Generate request Correlation ID if missed
+	correlationId, ok := msg.Headers[CorrelationIdHeader]
+	if !ok || len(correlationId) == 0 {
+		if len(msg.Headers) == 0 {
+			msg.Headers = make(map[string]string)
+		}
+
+		correlationId = uuid.New().String()
+		msg.Headers[CorrelationIdHeader] = correlationId
+	}
+
+	var (
+		replyTopic = options.ReplyToTopic
+		timeout    = options.Timeout
+	)
+
+	// Subscribe for reply topic if didn't
+	if _, ok := k.respSubscribers[replyTopic]; !ok {
+		replySub, err := k.Subscribe(replyTopic, func(e broker.Event) error {
+			if e.Message() == nil {
+				return broker.EmptyRequestError{}
+			}
+
+			cId, correlationIdOk := e.Message().Headers[CorrelationIdHeader]
+			if !correlationIdOk {
+				return nil
+			}
+
+			msgChan, msgChanOk := k.resps[cId]
+			if msgChanOk {
+				msgChan <- e.Message()
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		k.respSubscribers[replyTopic] = replySub
+	}
+
+	k.resps[correlationId] = make(chan *broker.Message, 1)
+
+	err := k.sendMessage(topic, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	// wait for the response message
+	msgChan := k.resps[correlationId]
+	select {
+	case body := <-msgChan:
+		// remove processed channel
+		delete(k.resps, correlationId)
+		return body, nil
+	case <-time.After(timeout):
+		// remove processed channel
+		delete(k.resps, correlationId)
+		return nil, broker.RequestTimeoutResponse{
+			Timeout: timeout,
+		}
+	}
+}
+
+func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
+	kMsg := k.toKafkaMessage(topic, msg)
+	if k.ap != nil {
+		k.ap.Input() <- kMsg
+		return nil
+	} else if k.p != nil {
+		_, _, err := k.p.SendMessage(kMsg)
+		return err
+	}
+	return errors.New(`no connection resources available`)
+}
+
+func (k *kBroker) toKafkaMessage(topic string, msg *broker.Message) *sarama.ProducerMessage {
+	kMsg := sarama.ProducerMessage{
+		Topic:    topic,
+		Value:    sarama.StringEncoder(msg.Body),
+		Metadata: msg,
+	}
+
+	for k, v := range msg.Headers {
+		kMsg.Headers = append(kMsg.Headers, sarama.RecordHeader{
+			Key:   []byte(k),
+			Value: []byte(v),
+		})
+	}
+
+	return &kMsg
 }
 
 func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
@@ -197,11 +385,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 		o(&opt)
 	}
 	// we need to create a new client per consumer
-	c, err := k.getSaramaClusterClient(topic)
-	if err != nil {
-		return nil, err
-	}
-	cg, err := sarama.NewConsumerGroupFromClient(opt.Group, c)
+	cg, err := k.getSaramaConsumerGroup(opt.Group)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +405,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 			select {
 			case err := <-cg.Errors():
 				if err != nil {
-					k.getLogger().Errorf(ctx, "consumer error:", err)
+					k.getLogger().Errorf(ctx, "consumer error: %s", err)
 				}
 			default:
 				err := cg.Consume(ctx, topics, csHandler)
@@ -231,12 +415,18 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 				case nil:
 					continue
 				default:
-					k.getLogger().Errorf(ctx, "consumer error:", err)
+					k.getLogger().Errorf(ctx, "consumer error: %s", err)
 				}
 			}
 		}
 	}()
-	return &subscriber{cg: cg, opts: opt, t: topic}, nil
+
+	return &subscriber{
+		k:    k,
+		cg:   cg,
+		opts: opt,
+		t:    topic,
+	}, nil
 }
 
 func (k *kBroker) getBrokerConfig() *sarama.Config {
@@ -246,7 +436,6 @@ func (k *kBroker) getBrokerConfig() *sarama.Config {
 	return DefaultBrokerConfig
 }
 
-// get config for broker
 func (k *kBroker) getClusterConfig() *sarama.Config {
 	if c, ok := k.opts.Context.Value(clusterConfigKey{}).(*sarama.Config); ok {
 		return c
@@ -259,22 +448,21 @@ func (k *kBroker) getClusterConfig() *sarama.Config {
 	}
 
 	clusterConfig.Consumer.Return.Errors = true
-	clusterConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
+	clusterConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	return clusterConfig
 }
 
-// get config for clients
-func (k *kBroker) getSaramaClusterClient(topic string) (sarama.Client, error) {
+func (k *kBroker) getSaramaConsumerGroup(groupID string) (sarama.ConsumerGroup, error) {
 	config := k.getClusterConfig()
-	cs, err := sarama.NewClient(k.addrs, config)
+	cg, err := sarama.NewConsumerGroup(k.addrs, groupID, config)
 	if err != nil {
 		return nil, err
 	}
 	k.scMutex.Lock()
 	defer k.scMutex.Unlock()
-	k.sc = append(k.sc, cs)
-	return cs, nil
+	k.cgs = append(k.cgs, cg)
+	return cg, nil
 }
 
 func (k *kBroker) getLogger() logger.Logger {
@@ -283,6 +471,20 @@ func (k *kBroker) getLogger() logger.Logger {
 		logger = DefaultLogger
 	}
 	return logger
+}
+
+func (k *kBroker) getAsyncProduceChan() (chan<- *sarama.ProducerError, chan<- *sarama.ProducerMessage) {
+	var (
+		errors    chan<- *sarama.ProducerError
+		successes chan<- *sarama.ProducerMessage
+	)
+	if c, ok := k.opts.Context.Value(asyncProduceErrorKey{}).(chan<- *sarama.ProducerError); ok {
+		errors = c
+	}
+	if c, ok := k.opts.Context.Value(asyncProduceSuccessKey{}).(chan<- *sarama.ProducerMessage); ok {
+		successes = c
+	}
+	return errors, successes
 }
 
 func (k *kBroker) String() string {
