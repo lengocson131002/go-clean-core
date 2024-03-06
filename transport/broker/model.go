@@ -3,7 +3,7 @@ package broker
 import (
 	"errors"
 
-	dErrors "github.com/lengocson131002/go-clean/pkg/errors"
+	dErrors "github.com/lengocson131002/go-clean-core/errors"
 )
 
 type Result struct {

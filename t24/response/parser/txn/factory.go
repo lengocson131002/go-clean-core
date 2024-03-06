@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/lengocson131002/go-clean/pkg/t24/response/parser"
+	"github.com/lengocson131002/go-clean-core/t24/response/parser"
 )
 
 type ofsResponseParserFactory struct {

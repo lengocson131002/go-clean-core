@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-type EmptyRequestError struct{}
+type EmptyMessageError struct{}
 
-func (e EmptyRequestError) Error() string {
-	return fmt.Sprintf("Empty broker request")
+func (e EmptyMessageError) Error() string {
+	return fmt.Sprintf("Empty broker message")
 }
 
 type InvalidDataFormatError struct{}

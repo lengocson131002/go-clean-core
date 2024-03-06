@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/IBM/sarama"
-	"github.com/lengocson131002/go-clean/pkg/transport/broker"
+	"github.com/lengocson131002/go-clean-core/transport/broker"
 )
 
 var (

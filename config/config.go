@@ -3,7 +3,7 @@ package config
 import "time"
 
 type Configure interface {
-	Get(key string) any
+	Get(key string) interface{}
 	GetString(key string) string
 	GetBool(key string) bool
 	GetInt(key string) int

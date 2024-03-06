@@ -1,23 +1,21 @@
-package validation
+package goplayaround
 
 import (
 	"github.com/go-playground/validator/v10"
+	"github.com/lengocson131002/go-clean-core/validation"
 )
 
 type _validator struct {
 	validator *validator.Validate
 }
 
-func NewGpValidator() Validator {
+func NewGpValidator() validation.Validator {
 	val := validator.New()
 	return &_validator{
 		validator: val,
 	}
 }
 
-var _ Validator = (*_validator)(nil)
-
-// Validate implements Validator.
 func (v *_validator) Validate(i interface{}) error {
 	err := v.validator.Struct(i)
 	if err != nil {

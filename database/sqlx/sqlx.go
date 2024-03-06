@@ -1,17 +1,18 @@
-package database
+package sqlx
 
 import (
 	"github.com/jmoiron/sqlx"
+	"github.com/lengocson131002/go-clean-core/database"
 )
 
-type SqlxDatabaseConnector struct {
+type SqlxDatabase struct {
 }
 
-func NewSqlxDatabaseConnector() DatabaseConnector {
-	return &SqlxDatabaseConnector{}
+func NewSqlxDatabaseConnector() database.Database {
+	return &SqlxDatabase{}
 }
 
-func (c *SqlxDatabaseConnector) Connect(driverName string, dsn string, poolOptions *PoolOptions) (*Gdbc, error) {
+func (c *SqlxDatabase) Connect(driverName string, dsn string, poolOptions *database.PoolOptions) (*database.Gdbc, error) {
 	db := sqlx.MustConnect(driverName, dsn)
 
 	err := db.Ping()
@@ -29,7 +30,9 @@ func (c *SqlxDatabaseConnector) Connect(driverName string, dsn string, poolOptio
 		db.SetConnMaxIdleTime(poolOptions.MaxIdleTime)
 	}
 
-	return &Gdbc{
-		&SqlxDBTx{db},
+	return &database.Gdbc{
+		Executor: &SqlxDBTx{
+			DB: db,
+		},
 	}, err
 }

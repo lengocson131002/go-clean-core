@@ -1,10 +1,10 @@
-package config
+package viper
 
 import (
-	"fmt"
 	"os"
 	"time"
 
+	"github.com/lengocson131002/go-clean-core/config"
 	"github.com/spf13/viper"
 )
 
@@ -12,13 +12,10 @@ type ViperConfig struct {
 	cfg *viper.Viper
 }
 
-type ConfigPath string
-
 type ConfigFile string
 
-func NewViperConfig(f *ConfigFile) *ViperConfig {
+func NewViperConfig(f *ConfigFile) (config.Configure, error) {
 	viper := viper.New()
-
 	viper.AutomaticEnv()
 
 	// check if config file exists
@@ -28,19 +25,18 @@ func NewViperConfig(f *ConfigFile) *ViperConfig {
 			viper.SetConfigFile(cfgFile)
 			err := viper.ReadInConfig()
 			if err != nil {
-				panic(fmt.Errorf("Fatal error config file: %w \n", err))
+				return nil, err
 			}
-
 		}
 	}
 
 	return &ViperConfig{
 		cfg: viper,
-	}
+	}, nil
 }
 
 // Get implements ConfigInterface.
-func (c *ViperConfig) Get(key string) any {
+func (c *ViperConfig) Get(key string) interface{} {
 	return c.cfg.Get(key)
 }
 
@@ -118,5 +114,3 @@ func (c *ViperConfig) GetUint32(key string) uint32 {
 func (c *ViperConfig) GetUint64(key string) uint64 {
 	return c.cfg.GetUint64(key)
 }
-
-var _ Configure = (*ViperConfig)(nil)

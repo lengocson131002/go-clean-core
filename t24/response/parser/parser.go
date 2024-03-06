@@ -6,7 +6,7 @@ import (
 	"html"
 	"strings"
 
-	"github.com/lengocson131002/go-clean/pkg/t24/response/model"
+	"github.com/lengocson131002/go-clean-core/t24/response/model"
 )
 
 // OfsResponseDataParser is an interface for parsing OFS response data.

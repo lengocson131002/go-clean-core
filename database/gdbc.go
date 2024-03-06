@@ -19,7 +19,7 @@ type SqlGdbc interface {
 
 // Used this in repositories
 type Gdbc struct {
-	sDB SqlGdbc
+	Executor SqlGdbc
 }
 
 // Exec implements SqlGdbc.
@@ -57,13 +57,13 @@ func (g *Gdbc) getConnection(ctx context.Context) SqlGdbc {
 	if s != nil {
 		return s
 	}
-	return g.sDB
+	return g.Executor
 }
 
 func (g *Gdbc) WithinTransaction(ctx context.Context, txFunc func(ctx context.Context) error) error {
-	return g.sDB.WithinTransaction(ctx, txFunc)
+	return g.Executor.WithinTransaction(ctx, txFunc)
 }
 
 func (g *Gdbc) WithinTransactionOptions(ctx context.Context, txFunc func(ctx context.Context) error, txOptions *sql.TxOptions) error {
-	return g.sDB.WithinTransactionOptions(ctx, txFunc, txOptions)
+	return g.Executor.WithinTransactionOptions(ctx, txFunc, txOptions)
 }

@@ -56,7 +56,7 @@ func (p Ping) Check(name string) Integration {
 			Name:         name,
 			Error:        errorMessage,
 			Status:       status,
-			ResponseTime: time.Since(start).Milliseconds(),
+			ResponseTime: time.Since(start).Nanoseconds(),
 		}
 	}
 
@@ -81,14 +81,14 @@ func (p Ping) Check(name string) Integration {
 			Name:         name,
 			Error:        errorMessage,
 			Status:       status,
-			ResponseTime: time.Since(start).Milliseconds(),
+			ResponseTime: time.Since(start).Nanoseconds(),
 		}
 	}
 
 	return Integration{
 		Name:         name,
 		Status:       status,
-		ResponseTime: time.Since(start).Milliseconds(),
+		ResponseTime: time.Since(start).Nanoseconds(),
 		Error:        errorMessage,
 	}
 

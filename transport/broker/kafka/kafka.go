@@ -9,8 +9,8 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
-	"github.com/lengocson131002/go-clean/pkg/logger"
-	"github.com/lengocson131002/go-clean/pkg/transport/broker"
+	"github.com/lengocson131002/go-clean-core/logger"
+	"github.com/lengocson131002/go-clean-core/transport/broker"
 )
 
 var (
@@ -296,11 +296,19 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 		timeout    = options.Timeout
 	)
 
+	msgChan := make(chan *broker.Message, 1)
+	k.resps[correlationId] = msgChan
+
 	// Subscribe for reply topic if didn't
 	if _, ok := k.respSubscribers[replyTopic]; !ok {
+		var subOpts = make([]broker.SubscribeOption, 0)
+		if len(options.ReplyConsumerGroup) != 0 {
+			subOpts = append(subOpts, broker.WithSubscribeGroup(options.ReplyConsumerGroup))
+		}
+
 		replySub, err := k.Subscribe(replyTopic, func(e broker.Event) error {
 			if e.Message() == nil {
-				return broker.EmptyRequestError{}
+				return broker.EmptyMessageError{}
 			}
 
 			cId, correlationIdOk := e.Message().Headers[CorrelationIdHeader]
@@ -314,7 +322,7 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 			}
 
 			return nil
-		})
+		}, subOpts...)
 
 		if err != nil {
 			return nil, err
@@ -323,20 +331,18 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 		k.respSubscribers[replyTopic] = replySub
 	}
 
-	k.resps[correlationId] = make(chan *broker.Message, 1)
-
+	// send message to request topic
 	err := k.sendMessage(topic, msg)
 	if err != nil {
 		return nil, err
 	}
 
-	// wait for the response message
-	msgChan := k.resps[correlationId]
 	select {
 	case body := <-msgChan:
 		// remove processed channel
 		delete(k.resps, correlationId)
 		return body, nil
+
 	case <-time.After(timeout):
 		// remove processed channel
 		delete(k.resps, correlationId)
@@ -347,6 +353,16 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 }
 
 func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
+	// create correlation ID for message
+	if msg.Headers == nil {
+		msg.Headers = make(map[string]string)
+	}
+
+	correlationId, ok := msg.Headers[CorrelationIdHeader]
+	if !ok || len(correlationId) == 0 {
+		msg.Headers[CorrelationIdHeader] = uuid.New().String()
+	}
+
 	kMsg := k.toKafkaMessage(topic, msg)
 	if k.ap != nil {
 		k.ap.Input() <- kMsg
@@ -396,6 +412,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 		kopts:   k.opts,
 		cg:      cg,
 		logger:  k.getLogger(),
+		ready:   make(chan bool),
 	}
 
 	ctx := context.Background()
@@ -413,6 +430,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 				case sarama.ErrClosedConsumerGroup:
 					return
 				case nil:
+					csHandler.ready = make(chan bool)
 					continue
 				default:
 					k.getLogger().Errorf(ctx, "consumer error: %s", err)
@@ -420,6 +438,11 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 			}
 		}
 	}()
+
+	// wait until consumer group running
+	<-csHandler.ready
+
+	k.getLogger().Infof(ctx, "Subcribed to topic: %s. Consumer group: %s", topic, opt.Group)
 
 	return &subscriber{
 		k:    k,

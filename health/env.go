@@ -36,7 +36,7 @@ func (ec *EnvChecker) Check(name string) Integration {
 	return Integration{
 		Name:         name,
 		Status:       status,
-		ResponseTime: time.Since(start).Milliseconds(),
+		ResponseTime: time.Since(start).Nanoseconds(),
 		Error:        errorMessage,
 	}
 }

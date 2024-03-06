@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/lengocson131002/go-clean/pkg/trace"
+	"github.com/lengocson131002/go-clean-core/trace"
 )
 
 type Option func(*Options)

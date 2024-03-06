@@ -3,9 +3,9 @@ package errors
 import "net/http"
 
 type DomainError struct {
-	Status  int    // http status mapping
-	Code    string // domain error code
-	Message string // domain error message
+	Status  int    `json:"status"`  // http status mapping
+	Code    string `json:"code"`    // domain error code
+	Message string `json:"message"` // domain error message
 }
 
 func (err *DomainError) Error() string {

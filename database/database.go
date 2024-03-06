@@ -1,6 +1,6 @@
 package database
 
-type DatabaseConnector interface {
+type Database interface {
 	// Connect to database using:
 	// 1. drivername
 	// 2. dsn(connection string)

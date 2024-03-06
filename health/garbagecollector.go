@@ -48,7 +48,7 @@ func (gc *GarbageCollectionMaxChecker) Check(name string) Integration {
 	return Integration{
 		Status:       status,
 		Name:         name,
-		ResponseTime: time.Since(start).Milliseconds(),
+		ResponseTime: time.Since(start).Nanoseconds(),
 		Error:        errorMessage,
 	}
 

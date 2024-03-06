@@ -1,4 +1,4 @@
-package database
+package sqlx
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lengocson131002/go-clean-core/database"
 )
 
 func (sdt *SqlxDBTx) WithinTransaction(ctx context.Context, txFunc func(ctx context.Context) error) error {
@@ -39,7 +40,7 @@ func (sdt *SqlxDBTx) WithinTransactionOptions(ctx context.Context, txFunc func(c
 		}
 	}()
 
-	err = txFunc(InjectTx(ctx, sct))
+	err = txFunc(database.InjectTx(ctx, sct))
 	return err
 }
 
@@ -61,6 +62,6 @@ func (sct *SqlxConnTx) WithinTransactionOptions(ctx context.Context, txFunc func
 		}
 	}()
 
-	err = txFunc(InjectTx(ctx, sct))
+	err = txFunc(database.InjectTx(ctx, sct))
 	return err
 }

@@ -42,7 +42,7 @@ func (app *HealthCheckerApplication) runChecks(checks map[string]HealthCheckHand
 	go func() {
 		wg.Wait()
 		close(checklist)
-		result.Duration = time.Since(start).Milliseconds()
+		result.Duration = time.Since(start).Nanoseconds()
 	}()
 
 	for chk := range checklist {

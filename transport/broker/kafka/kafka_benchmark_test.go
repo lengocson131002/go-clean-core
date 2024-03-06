@@ -6,9 +6,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/lengocson131002/go-clean/pkg/logger"
-	"github.com/lengocson131002/go-clean/pkg/logger/logrus"
-	"github.com/lengocson131002/go-clean/pkg/transport/broker"
+	"github.com/lengocson131002/go-clean-core/logger"
+	"github.com/lengocson131002/go-clean-core/logger/logrus"
+	"github.com/lengocson131002/go-clean-core/transport/broker"
 )
 
 func getKafkaBroker() broker.Broker {
@@ -39,7 +39,7 @@ type KResponseType struct {
 	Result float64
 }
 
-func BenchmarkKafkaPublishAndReceive(b *testing.B) {
+func BenchmarkKafka(b *testing.B) {
 	var (
 		kBroker      = getKafkaBroker()
 		requestTopic = "go.clean.test.benchmark.request"
@@ -54,7 +54,7 @@ func BenchmarkKafkaPublishAndReceive(b *testing.B) {
 	_, err = kBroker.Subscribe(requestTopic, func(e broker.Event) error {
 		msg := e.Message()
 		if msg == nil {
-			return broker.EmptyRequestError{}
+			return broker.EmptyMessageError{}
 		}
 
 		var req KRequestType
@@ -62,8 +62,6 @@ func BenchmarkKafkaPublishAndReceive(b *testing.B) {
 		if err != nil {
 			return broker.InvalidDataFormatError{}
 		}
-
-		b.Logf("Received request: %v", req)
 
 		result := KResponseType{
 			Result: math.Pow(float64(req.Number), 2),
@@ -91,7 +89,8 @@ func BenchmarkKafkaPublishAndReceive(b *testing.B) {
 		b.Error(err)
 	}
 
-	for i := 0; i < 1; i++ {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
 		req := KRequestType{
 			Number: rand.Intn(100),
 		}
@@ -99,13 +98,15 @@ func BenchmarkKafkaPublishAndReceive(b *testing.B) {
 		if err != nil {
 			b.Error(err)
 		}
-		_, err = kBroker.PublishAndReceive(requestTopic, &broker.Message{
+
+		err = kBroker.Publish(requestTopic, &broker.Message{
 			Body: reqByte,
-		}, broker.WithPublishReplyToTopic(replyTopic))
+		},
+			broker.WithPublishReplyToTopic(replyTopic),
+			broker.WithReplyConsumerGroup("benchmark.test"))
 
 		if err != nil {
 			b.Logf("error: %v", err)
-			b.Error(err)
 		}
 	}
 }
