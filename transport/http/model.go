@@ -7,7 +7,7 @@ import (
 )
 
 type Result struct {
-	Status  int         `json:"-"`       // Http status code
+	Status  int         `json:"status"`  // Http status code
 	Code    string      `json:"code"`    // Error code
 	Message string      `json:"message"` // Message
 	Details interface{} `json:"details"` //

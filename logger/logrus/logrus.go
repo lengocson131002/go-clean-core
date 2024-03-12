@@ -182,16 +182,18 @@ func (l *logrusLogger) Warnf(ctx context.Context, format string, args ...interfa
 func NewLogrusLogger(opts ...logger.Option) logger.Logger {
 	// Default options
 	loggerOpts := logger.Options{
-		Level:           logger.InfoLevel,
-		Fields:          make(map[string]interface{}),
-		Out:             os.Stderr,
-		Context:         context.Background(),
-		CallerSkipCount: 7,
+		MaskSensitiveData: true,
+		Level:             logger.InfoLevel,
+		Fields:            make(map[string]interface{}),
+		Out:               os.Stderr,
+		Context:           context.Background(),
+		CallerSkipCount:   7,
 	}
 	options := LogrusOptions{
 		Options: loggerOpts,
 		Formatter: &LoggingFormatter{
-			callerSkipCount: loggerOpts.CallerSkipCount,
+			callerSkipCount:     loggerOpts.CallerSkipCount,
+			maskedSensitiveData: loggerOpts.MaskSensitiveData,
 		},
 		Hooks:        make(logrus.LevelHooks),
 		ReportCaller: false,
@@ -241,7 +243,8 @@ func logrusToLoggerLevel(level logrus.Level) logger.Level {
 }
 
 type LoggingFormatter struct {
-	callerSkipCount int
+	callerSkipCount     int
+	maskedSensitiveData bool
 }
 
 func (l LoggingFormatter) Format(entry *logrus.Entry) ([]byte, error) {
@@ -251,15 +254,28 @@ func (l LoggingFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	// Get the script name from the full file path
 	scriptName := filepath.Base(filename)
 
+	var traceId, spanId string
+	if traceIdData, ok := entry.Data[logger.FIELD_TRACE_ID]; ok {
+		traceId = traceIdData.(string)
+	}
+
+	if spanIdData, ok := entry.Data[logger.FIELD_SPAN_ID]; ok {
+		spanId = spanIdData.(string)
+	}
+
 	message := fmt.Sprintf("[%s] [%s] [Trace ID: %s] [Span ID: %s] [%s:%d] %s\n",
 		entry.Time.Format("2006-01-02 15:04:05"), // Date-time
 		strings.ToUpper(entry.Level.String()),    // Log level
-		entry.Data[logger.FIELD_TRACE_ID],        // Trace ID
-		entry.Data[logger.FIELD_SPAN_ID],         // Span ID
+		traceId,                                  // Trace ID
+		spanId,                                   // Span ID
 		scriptName,                               //Script name
 		line,                                     // Line number
 		entry.Message,                            // Log message
 	)
+
+	if l.maskedSensitiveData {
+		message = logger.MaskSensitiveData(message)
+	}
 
 	return []byte(message), nil
 }

@@ -10,6 +10,8 @@ import (
 type Option func(*Options)
 
 type Options struct {
+	// Mask sensitive data. Default true
+	MaskSensitiveData bool
 	// It's common to set this to a file, or leave it default which is `os.Stderr`
 	Out io.Writer
 	// fields to always be logged
@@ -22,6 +24,13 @@ type Options struct {
 	Context context.Context
 	//tracer for extract Trace ID, Span ID
 	Tracer trace.Tracer
+}
+
+// WithMaskedSensitiveData set default to masked sensitive data or not
+func WithMaskedSensitiveData(masked bool) Option {
+	return func(args *Options) {
+		args.MaskSensitiveData = masked
+	}
 }
 
 // WithFields set default fields for the logger.
