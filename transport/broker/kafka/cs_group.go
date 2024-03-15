@@ -15,8 +15,8 @@ type consumerGroupHandler struct {
 	subopts broker.SubscribeOptions
 	kopts   broker.BrokerOptions
 	cg      sarama.ConsumerGroup
-	sess    sarama.ConsumerGroupSession
 	ready   chan bool
+	codec   Codec
 }
 
 func (h *consumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
@@ -35,7 +35,7 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 			ctx := context.Background()
 
 			if !ok {
-				h.logger.Info(ctx, "message channel was closed")
+				h.logger.Info(ctx, "[kafka consumer] message channel was closed")
 				return nil
 			}
 
@@ -43,18 +43,15 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 				continue
 			}
 
-			var m = broker.Message{
-				Headers: make(map[string]string),
+			m, err := h.codec.Unmarshal(msg)
+			if err != nil {
+				h.logger.Errorf(ctx, "[kafka consumer]: failed to unmarshal consumed message: %v", err)
+				continue
 			}
 
-			for _, header := range msg.Headers {
-				m.Headers[string(header.Key)] = string(header.Value)
-			}
+			p := &publication{m: m, t: msg.Topic, km: msg, cg: h.cg, sess: session}
 
-			m.Body = []byte(msg.Value)
-			p := &publication{m: &m, t: msg.Topic, km: msg, cg: h.cg, sess: session}
-
-			err := h.handler(p)
+			err = h.handler(p)
 			if err == nil && h.subopts.AutoAck {
 				session.MarkMessage(msg, "")
 			} else if err != nil {

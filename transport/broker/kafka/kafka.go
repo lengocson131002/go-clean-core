@@ -14,27 +14,24 @@ import (
 )
 
 var (
-	CorrelationIdHeader = "correlationId"
-	ReplyToTopicHeader  = "replyToTopic"
 	RequestReplyTimeout = time.Second * 10
 )
 
 type kBroker struct {
 	addrs []string
 
-	c  sarama.Client        // broker connection client
-	p  sarama.SyncProducer  // sync producer
-	ap sarama.AsyncProducer // async producer
-
-	cgs []sarama.ConsumerGroup
-
+	c         sarama.Client        // broker connection client
+	p         sarama.SyncProducer  // sync producer
+	ap        sarama.AsyncProducer // async producer
+	cgs       []sarama.ConsumerGroup
 	connected bool
 	scMutex   sync.Mutex
 	opts      broker.BrokerOptions
 
 	// request-reply patterns
-	resps           map[string](chan *broker.Message) // response channels. key: message correlation ID, value: response body
-	respSubscribers map[string]broker.Subscriber      // response subscribers. key: response topic, value: response subscriber
+	resps           *sync.Map
+	respSubscribers *sync.Map
+	codec           Codec
 }
 
 func NewKafkaBroker(opts ...broker.BrokerOption) broker.Broker {
@@ -61,6 +58,7 @@ func NewKafkaBroker(opts ...broker.BrokerOption) broker.Broker {
 
 	return &kBroker{
 		addrs: cAddrs,
+		codec: DefaultMarshaler{},
 		opts:  options,
 	}
 }
@@ -205,8 +203,8 @@ func (k *kBroker) Connect() error {
 	k.connected = true
 
 	// request-reply pattern
-	k.resps = make(map[string]chan *broker.Message)
-	k.respSubscribers = make(map[string]broker.Subscriber)
+	k.resps = &sync.Map{}
+	k.respSubscribers = &sync.Map{}
 
 	k.scMutex.Unlock()
 
@@ -232,8 +230,8 @@ func (k *kBroker) Disconnect() error {
 	k.connected = false
 
 	// request-reply pattern
-	k.resps = nil
-	k.respSubscribers = nil
+	k.resps = &sync.Map{}
+	k.respSubscribers = &sync.Map{}
 
 	return nil
 }
@@ -280,27 +278,13 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 		opt(&options)
 	}
 
-	// Generate request Correlation ID if missed
-	correlationId, ok := msg.Headers[CorrelationIdHeader]
-	if !ok || len(correlationId) == 0 {
-		if len(msg.Headers) == 0 {
-			msg.Headers = make(map[string]string)
-		}
-
-		correlationId = uuid.New().String()
-		msg.Headers[CorrelationIdHeader] = correlationId
-	}
-
 	var (
 		replyTopic = options.ReplyToTopic
 		timeout    = options.Timeout
 	)
 
-	msgChan := make(chan *broker.Message, 1)
-	k.resps[correlationId] = msgChan
-
 	// Subscribe for reply topic if didn't
-	if _, ok := k.respSubscribers[replyTopic]; !ok {
+	if _, ok := k.respSubscribers.Load(replyTopic); !ok {
 		var subOpts = make([]broker.SubscribeOption, 0)
 		if len(options.ReplyConsumerGroup) != 0 {
 			subOpts = append(subOpts, broker.WithSubscribeGroup(options.ReplyConsumerGroup))
@@ -316,9 +300,11 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 				return nil
 			}
 
-			msgChan, msgChanOk := k.resps[cId]
+			msgChan, msgChanOk := k.resps.Load(cId)
 			if msgChanOk {
-				msgChan <- e.Message()
+				msgChan.(chan *broker.Message) <- e.Message()
+				// remove processed channel
+				k.resps.Delete(cId)
 			}
 
 			return nil
@@ -328,7 +314,7 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 			return nil, err
 		}
 
-		k.respSubscribers[replyTopic] = replySub
+		k.respSubscribers.Store(replyTopic, replySub)
 	}
 
 	// send message to request topic
@@ -337,15 +323,21 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 		return nil, err
 	}
 
+	// Create a channel to receive reply messages
+	correlationId, correlationIdOk := msg.Headers[CorrelationIdHeader]
+	if !correlationIdOk {
+		return nil, fmt.Errorf("missing correlation id in message")
+	}
+
+	msgChan := make(chan *broker.Message, 1)
+	k.resps.Store(correlationId, msgChan)
+
 	select {
 	case body := <-msgChan:
-		// remove processed channel
-		delete(k.resps, correlationId)
 		return body, nil
-
 	case <-time.After(timeout):
 		// remove processed channel
-		delete(k.resps, correlationId)
+		k.resps.Delete(correlationId)
 		return nil, broker.RequestTimeoutResponse{
 			Timeout: timeout,
 		}
@@ -353,17 +345,11 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 }
 
 func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
-	// create correlation ID for message
-	if msg.Headers == nil {
-		msg.Headers = make(map[string]string)
+	kMsg, err := k.codec.Marshal(topic, msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal to kafka message: %w", err)
 	}
 
-	correlationId, ok := msg.Headers[CorrelationIdHeader]
-	if !ok || len(correlationId) == 0 {
-		msg.Headers[CorrelationIdHeader] = uuid.New().String()
-	}
-
-	kMsg := k.toKafkaMessage(topic, msg)
 	if k.ap != nil {
 		k.ap.Input() <- kMsg
 		return nil
@@ -372,23 +358,6 @@ func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
 		return err
 	}
 	return errors.New(`no connection resources available`)
-}
-
-func (k *kBroker) toKafkaMessage(topic string, msg *broker.Message) *sarama.ProducerMessage {
-	kMsg := sarama.ProducerMessage{
-		Topic:    topic,
-		Value:    sarama.StringEncoder(msg.Body),
-		Metadata: msg,
-	}
-
-	for k, v := range msg.Headers {
-		kMsg.Headers = append(kMsg.Headers, sarama.RecordHeader{
-			Key:   []byte(k),
-			Value: []byte(v),
-		})
-	}
-
-	return &kMsg
 }
 
 func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
@@ -413,6 +382,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 		cg:      cg,
 		logger:  k.getLogger(),
 		ready:   make(chan bool),
+		codec:   k.codec,
 	}
 
 	ctx := context.Background()

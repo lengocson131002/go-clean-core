@@ -88,7 +88,7 @@ func GetKafkaBroker(cfg *KafkaBrokerConfig, opts ...broker.BrokerOption) (broker
 			cfg.TLSSkipVerify)
 
 		if err != nil {
-			return nil, fmt.Errorf("Failed to create TLS configuration: %w", err)
+			return nil, fmt.Errorf("failed to create TLS configuration: %w", err)
 		}
 
 		conf.Net.TLS.Config = tlsConfig

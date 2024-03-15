@@ -14,6 +14,10 @@ func TestMaskString(t *testing.T) {
 			expectedOutput: `{"username": "john_doe", "password": "***"} <password> **** </password> <credentials> ***** </credentials> base64data: ****************************************************************`,
 		},
 		{
+			input:          `{"username": "john_doe", "password": "123"} <password> 1234 </password> <credentials> 12345 </credentials> base64data: ZnNkZnNkZnNkZnNkZnNkZnNkZnNkZnNmc2RzZGZzZGZkc2ZzZGZzZGZzZGZmc2QK`,
+			expectedOutput: `{"username": "john_doe", "password": "***"} <password> **** </password> <credentials> ***** </credentials> base64data: ****************************************************************`,
+		},
+		{
 			input:          `{"password": "123"} <password>1234</password> <credentials>12345</credentials> base64data: XYZ123==`,
 			expectedOutput: `{"password": "***"} <password>****</password> <credentials>*****</credentials> base64data: XYZ123==`,
 		},
