@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	RequestReplyTimeout = time.Second * 10
+	RequestReplyTimeout = time.Second * 60
 )
 
 type kBroker struct {
@@ -29,9 +29,10 @@ type kBroker struct {
 	opts      broker.BrokerOptions
 
 	// request-reply patterns
-	resps           *sync.Map
-	respSubscribers *sync.Map
-	codec           Codec
+	resps           sync.Map
+	respSubscribers sync.Map
+
+	codec Codec
 }
 
 func NewKafkaBroker(opts ...broker.BrokerOption) broker.Broker {
@@ -203,8 +204,8 @@ func (k *kBroker) Connect() error {
 	k.connected = true
 
 	// request-reply pattern
-	k.resps = &sync.Map{}
-	k.respSubscribers = &sync.Map{}
+	k.resps = sync.Map{}
+	k.respSubscribers = sync.Map{}
 
 	k.scMutex.Unlock()
 
@@ -230,8 +231,8 @@ func (k *kBroker) Disconnect() error {
 	k.connected = false
 
 	// request-reply pattern
-	k.resps = &sync.Map{}
-	k.respSubscribers = &sync.Map{}
+	k.resps = sync.Map{}
+	k.respSubscribers = sync.Map{}
 
 	return nil
 }
@@ -279,45 +280,13 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 	}
 
 	var (
-		replyTopic = options.ReplyToTopic
-		timeout    = options.Timeout
+		replyTopic         = options.ReplyToTopic
+		replyConsumerGroup = options.ReplyConsumerGroup
+		timeout            = options.Timeout
+		errChan            = make(chan error)
+		msgChan            = make(chan *broker.Message, 1)
 	)
 
-	// Subscribe for reply topic if didn't
-	if _, ok := k.respSubscribers.Load(replyTopic); !ok {
-		var subOpts = make([]broker.SubscribeOption, 0)
-		if len(options.ReplyConsumerGroup) != 0 {
-			subOpts = append(subOpts, broker.WithSubscribeGroup(options.ReplyConsumerGroup))
-		}
-
-		replySub, err := k.Subscribe(replyTopic, func(e broker.Event) error {
-			if e.Message() == nil {
-				return broker.EmptyMessageError{}
-			}
-
-			cId, correlationIdOk := e.Message().Headers[CorrelationIdHeader]
-			if !correlationIdOk {
-				return nil
-			}
-
-			msgChan, msgChanOk := k.resps.Load(cId)
-			if msgChanOk {
-				msgChan.(chan *broker.Message) <- e.Message()
-				// remove processed channel
-				k.resps.Delete(cId)
-			}
-
-			return nil
-		}, subOpts...)
-
-		if err != nil {
-			return nil, err
-		}
-
-		k.respSubscribers.Store(replyTopic, replySub)
-	}
-
-	// send message to request topic
 	err := k.sendMessage(topic, msg)
 	if err != nil {
 		return nil, err
@@ -328,13 +297,47 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 	if !correlationIdOk {
 		return nil, fmt.Errorf("missing correlation id in message")
 	}
-
-	msgChan := make(chan *broker.Message, 1)
 	k.resps.Store(correlationId, msgChan)
+
+	// Subscribe for reply topic if didn't
+	go func() {
+		if _, ok := k.respSubscribers.LoadOrStore(replyTopic, true); !ok {
+			var subOpts = make([]broker.SubscribeOption, 0)
+			if len(replyConsumerGroup) != 0 {
+				subOpts = append(subOpts, broker.WithSubscribeGroup(replyConsumerGroup))
+			}
+
+			_, err := k.Subscribe(replyTopic, func(e broker.Event) error {
+				go func() {
+					if e.Message() == nil {
+						return
+					}
+
+					cId, correlationIdOk := e.Message().Headers[CorrelationIdHeader]
+					if !correlationIdOk {
+						return
+					}
+
+					msgChan, msgChanOk := k.resps.LoadAndDelete(cId)
+					if msgChanOk {
+						msgChan.(chan *broker.Message) <- e.Message()
+					}
+				}()
+				return nil
+			}, subOpts...)
+
+			if err != nil {
+				errChan <- err
+				k.respSubscribers.Delete(replyTopic)
+			}
+		}
+	}()
 
 	select {
 	case body := <-msgChan:
 		return body, nil
+	case err := <-errChan:
+		return nil, err
 	case <-time.After(timeout):
 		// remove processed channel
 		k.resps.Delete(correlationId)
@@ -361,6 +364,8 @@ func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
 }
 
 func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+	start := time.Now()
+
 	opt := broker.SubscribeOptions{
 		AutoAck: true,
 		Group:   uuid.New().String(),
@@ -412,7 +417,7 @@ func (k *kBroker) Subscribe(topic string, handler broker.Handler, opts ...broker
 	// wait until consumer group running
 	<-csHandler.ready
 
-	k.getLogger().Infof(ctx, "Subcribed to topic: %s. Consumer group: %s", topic, opt.Group)
+	k.getLogger().Infof(ctx, "Subcribed to topic: %s. Consumer group: %s. Duration: %dms", topic, opt.Group, time.Since(start).Milliseconds())
 
 	return &subscriber{
 		k:    k,

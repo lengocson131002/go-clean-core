@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/lengocson131002/go-clean-core/transport/broker"
 )
 
@@ -38,6 +41,7 @@ func BenchmarkKafka(b *testing.B) {
 		kBroker      = getKafkaBroker()
 		requestTopic = "go.clean.test.benchmark.request"
 		replyTopic   = "go.clean.test.benchmark.reply"
+		errCount     int64
 	)
 
 	err := kBroker.Connect()
@@ -74,6 +78,7 @@ func BenchmarkKafka(b *testing.B) {
 
 		if err != nil {
 			b.Error(err)
+			b.Fail()
 		}
 
 		return nil
@@ -84,29 +89,56 @@ func BenchmarkKafka(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < 100; i++ {
+	round := 500
+	total := 100
+
+	var totalTime int64
+	var wg sync.WaitGroup
+	wg.Add(total * round)
+	for i := 0; i < round; i++ {
 		go func() {
-			req := KRequestType{
-				Number: rand.Intn(100),
-			}
-			reqByte, err := json.Marshal(req)
-			if err != nil {
-				b.Error(err)
-			}
+			for i := 0; i < total; i++ {
+				req := KRequestType{
+					Number: rand.Intn(100),
+				}
+				reqByte, err := json.Marshal(req)
+				if err != nil {
+					b.Error(err)
+				}
 
-			msg, err := kBroker.PublishAndReceive(requestTopic, &broker.Message{
-				Body: reqByte,
-			},
-				broker.WithPublishReplyToTopic(replyTopic))
+				start := time.Now()
+				b.Logf("Start time: %v", start)
+				msg, err := kBroker.PublishAndReceive(requestTopic, &broker.Message{
+					Headers: map[string]string{
+						"correlationId": uuid.New().String(),
+					},
+					Body: reqByte,
+				}, broker.WithPublishReplyToTopic(replyTopic),
+					broker.WithReplyConsumerGroup("benchmark.test"))
 
-			if err != nil {
-				b.Errorf("error: %v", err)
-				b.Fail()
-			} else {
-				b.Logf("Message: %v", string(msg.Body))
+				if err != nil {
+					errCount++
+					b.Errorf("benchmark error: %v", err)
+				} else {
+					var result map[string]float64
+					json.Unmarshal(msg.Body, &result)
+					expected := math.Pow(float64(req.Number), 2)
+					if result["Result"] != expected {
+						b.Errorf("Expected result: %v, got: %v", expected, result["Result"])
+					}
+					b.Logf("Message: %v. Expected result: %v, got: %v, Duration: %vms", string(msg.Headers[CorrelationIdHeader]), expected, result["Result"], time.Since(start).Milliseconds())
+				}
+
+				totalTime += time.Since(start).Milliseconds()
+				wg.Done()
 			}
 		}()
 	}
+
+	wg.Wait()
+	b.Logf("AVG: %vms", totalTime/int64(total*round))
+	kBroker.Disconnect()
+
 }
 
 func TestPublishAndReceived(t *testing.T) {
