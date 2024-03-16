@@ -97,7 +97,7 @@ func BenchmarkKafka(b *testing.B) {
 	wg.Add(total * round)
 	for i := 0; i < round; i++ {
 		go func() {
-			for i := 0; i < total; i++ {
+			for j := 0; j < total; j++ {
 				req := KRequestType{
 					Number: rand.Intn(100),
 				}
