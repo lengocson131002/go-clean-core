@@ -158,11 +158,12 @@ func buildRequestHandler[TRequest any, TResponse any](handler any) (RequestHandl
 // Send the request to its corresponding request handler.
 func Send[TRequest any, TResponse any](ctx context.Context, request TRequest) (TResponse, error) {
 	requestType := reflect.TypeOf(request)
+
 	var response TResponse
 	handler, ok := requestHandlersRegistrations[requestType]
 	if !ok {
 		// request-response strategy should have exactly one handler and if we can't find a corresponding handler, we should return an error
-		return *new(TResponse), fmt.Errorf("no handler for request %T", request)
+		return *new(TResponse), fmt.Errorf("no handler for request %T %v", request, requestHandlersRegistrations)
 	}
 
 	handlerValue, ok := buildRequestHandler[TRequest, TResponse](handler)

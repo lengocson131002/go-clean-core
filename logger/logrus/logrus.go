@@ -15,6 +15,7 @@ import (
 type entryLogger interface {
 	WithFields(fields logrus.Fields) *logrus.Entry
 	WithError(err error) *logrus.Entry
+	WithContext(ctx context.Context) *logrus.Entry
 
 	Log(level logrus.Level, args ...interface{})
 	Logf(level logrus.Level, format string, args ...interface{})
@@ -101,16 +102,7 @@ func (l *logrusLogger) Logf(ctx context.Context, level logger.Level, format stri
 
 func (l *logrusLogger) getLogEntry(ctx context.Context) entryLogger {
 	var entry = l.Logger
-	// Inject request information
-	if l.opts.Options.Tracer != nil {
-		if spanInfo := l.opts.Options.Tracer.ExtractSpanInfo(ctx); spanInfo != nil {
-			entry = entry.WithFields(logrus.Fields{
-				logger.FIELD_TRACE_ID: spanInfo.TraceID,
-				logger.FIELD_SPAN_ID:  spanInfo.SpanID,
-			})
-		}
-	}
-
+	entry = entry.WithContext(ctx)
 	return entry
 }
 
@@ -181,6 +173,8 @@ func (l *logrusLogger) Warnf(ctx context.Context, format string, args ...interfa
 // New builds a new logger based on options.
 func NewLogrusLogger(opts ...logger.Option) logger.Logger {
 	// Default options
+	var l logrusLogger
+
 	loggerOpts := logger.Options{
 		MaskSensitiveData: true,
 		Level:             logger.InfoLevel,
@@ -189,19 +183,17 @@ func NewLogrusLogger(opts ...logger.Option) logger.Logger {
 		Context:           context.Background(),
 		CallerSkipCount:   7,
 	}
-	options := LogrusOptions{
+	l.opts = LogrusOptions{
 		Options: loggerOpts,
 		Formatter: &LoggingFormatter{
-			callerSkipCount:     loggerOpts.CallerSkipCount,
-			maskedSensitiveData: loggerOpts.MaskSensitiveData,
+			logger: &l,
 		},
 		Hooks:        make(logrus.LevelHooks),
 		ReportCaller: false,
 		ExitFunc:     os.Exit,
 	}
-	l := &logrusLogger{opts: options}
 	_ = l.Init(opts...)
-	return l
+	return &l
 }
 
 func loggerToLogrusLevel(level logger.Level) logrus.Level {
@@ -243,37 +235,57 @@ func logrusToLoggerLevel(level logrus.Level) logger.Level {
 }
 
 type LoggingFormatter struct {
-	callerSkipCount     int
-	maskedSensitiveData bool
+	logger logger.Logger
 }
 
 func (l LoggingFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	var (
+		opts = l.logger.Options()
+	)
 	// Get the file and line number where the log was called
-	_, filename, line, _ := runtime.Caller(l.callerSkipCount)
+	_, filename, line, _ := runtime.Caller(opts.CallerSkipCount)
 
 	// Get the script name from the full file path
 	scriptName := filepath.Base(filename)
 
-	var traceId, spanId string
-	if traceIdData, ok := entry.Data[logger.FIELD_TRACE_ID]; ok {
-		traceId = traceIdData.(string)
-	}
-
-	if spanIdData, ok := entry.Data[logger.FIELD_SPAN_ID]; ok {
-		spanId = spanIdData.(string)
-	}
-
-	message := fmt.Sprintf("[%s] [%s] [Trace ID: %s] [Span ID: %s] [%s:%d] %s\n",
-		entry.Time.Format("2006-01-02 15:04:05"), // Date-time
-		strings.ToUpper(entry.Level.String()),    // Log level
-		traceId,                                  // Trace ID
-		spanId,                                   // Span ID
-		scriptName,                               //Script name
-		line,                                     // Line number
-		entry.Message,                            // Log message
+	// Common format
+	message := fmt.Sprintf("%s %s %s [%s:%d] %s\n",
+		entry.Time.Format("2006-01-02"),       // Date
+		entry.Time.Format("15:04:05.123"),     // Time
+		strings.ToUpper(entry.Level.String()), // Log level
+		scriptName,                            //Script name
+		line,                                  // Line number
+		entry.Message,                         // Log message
 	)
 
-	if l.maskedSensitiveData {
+	// Log format: %d{yyyy-MM-dd} %d{HH:mm:ss.SSS} %level [%thread] %logger{50} [%X{X-B3-TraceId},%X{X-B3-SpanId}] [%X{systemTraceId}] [%X{clientIP}] [%X{httpMethod}] [%X{serviceDomain}] [%X{operatorName}] [%X{stepName}] [%X{req.userAgent}] [%X{user}] [%X{processTime}] [%X{req.remoteHost}] [%X{req.xForwardedFor}] [%X{contentLength}] [%X{statusResponse}]
+	if traceEnabled := opts.Tracer != nil; traceEnabled {
+		spanInfo := opts.Tracer.ExtractSpanInfo(entry.Context)
+		message = fmt.Sprintf("%s %s %s [%s] [%s] [%s:%d] [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s] [%s] %s\n",
+			entry.Time.Format("2006-01-02"),
+			entry.Time.Format("15:04:05.123"),
+			strings.ToUpper(entry.Level.String()),
+			spanInfo.TraceID,
+			spanInfo.SpanID,
+			scriptName,
+			line,
+			spanInfo.ClientIP,
+			spanInfo.HttpMethod,
+			spanInfo.ServiceDomain,
+			spanInfo.OperatorName,
+			spanInfo.StepName,
+			spanInfo.UserAgent,
+			spanInfo.User,
+			spanInfo.ProcessTime,
+			spanInfo.RemoteHost,
+			spanInfo.XForwardedFor,
+			spanInfo.ContentLength,
+			spanInfo.StatusResponse,
+			entry.Message,
+		)
+	}
+
+	if opts.MaskSensitiveData {
 		message = logger.MaskSensitiveData(message)
 	}
 

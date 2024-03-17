@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -45,4 +46,34 @@ func Benchmark_Publish(b *testing.B) {
 			b.Error(err)
 		}
 	}
+}
+
+func Benchmark_Concurency(b *testing.B) {
+	cleanup()
+	bh1 := &PipelineBehaviourTest{}
+	bh2 := &PipelineBehaviourTest2{}
+
+	RegisterRequestPipelineBehaviors(bh1, bh2)
+
+	handler := &RequestTestHandler{}
+	errRegister := RegisterRequestHandler[*RequestTest, *ResponseTest](handler)
+	if errRegister != nil {
+		b.Error(errRegister)
+	}
+
+	b.ResetTimer()
+	var wg sync.WaitGroup
+	ctx := context.TODO()
+	for i := 0; i < b.N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := Send[*RequestTest, *ResponseTest](ctx, &RequestTest{Data: "test"})
+			if err != nil {
+				b.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+
 }

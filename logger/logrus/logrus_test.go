@@ -3,6 +3,11 @@ package logrus
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/lengocson131002/go-clean-core/logger"
+	"github.com/lengocson131002/go-clean-core/trace"
+	"github.com/lengocson131002/go-clean-core/trace/otel"
 )
 
 func TestMaskedData(t *testing.T) {
@@ -41,4 +46,60 @@ func TestMaskedData(t *testing.T) {
 			logger.Info(ctx, tc.input)
 		})
 	}
+}
+
+func TestLogCommon(t *testing.T) {
+	testCases := []struct {
+		input string
+	}{
+		{
+			input: "log information 1",
+		}, {
+			input: "log information 2",
+		},
+	}
+
+	ctx := context.Background()
+	logger := NewLogrusLogger()
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			logger.Info(ctx, tc.input)
+		})
+	}
+}
+
+func TestLogTracing(t *testing.T) {
+	testCases := []struct {
+		input string
+	}{
+		{
+			input: "log information 1",
+		}, {
+			input: "log information 2",
+		},
+	}
+
+	tracer, err := otel.NewOpenTelemetryTracer(context.Background(),
+		trace.WithTraceServiceName("go_logrus_testing"),
+		trace.WithTraceExporterEndpoint("localhost:4318"))
+
+	if err != nil {
+		t.Error(err)
+	}
+
+	logger := NewLogrusLogger(
+		logger.WithTracer(tracer),
+	)
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			ctx := context.Background()
+			ctx, finish := tracer.StartInternalTrace(ctx, "testing")
+			logger.Info(ctx, tc.input)
+			finish(ctx, trace.WithInternalResponse("test"))
+		})
+	}
+
+	time.Sleep(5 * time.Second)
 }

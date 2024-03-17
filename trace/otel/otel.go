@@ -23,38 +23,45 @@ type openTelemetryTracer struct {
 	exporterEndpoint string
 }
 
-func NewOpenTelemetryTracer(ctx context.Context, serviceName, exporterEndpoint string) (trace.Tracer, error) {
+func NewOpenTelemetryTracer(ctx context.Context, opts ...trace.TraceOption) (trace.Tracer, error) {
+	options := trace.TraceOptions{
+		ServiceName: "go-mcs",
+	}
+
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	tracer := openTelemetryTracer{
+		serviceName:      options.ServiceName,
+		exporterEndpoint: options.ExporterEndpoint,
+	}
+
 	// set global config trace
-	if err := SetGlobalTracer(ctx, serviceName, exporterEndpoint); err != nil {
+	if err := tracer.setGlobalTracer(ctx); err != nil {
 		return nil, err
 	}
 
-	return &openTelemetryTracer{
-		serviceName:      serviceName,
-		exporterEndpoint: exporterEndpoint,
-	}, nil
+	return &tracer, nil
 }
 
 // ExtractSpanInfo implements trace.Tracer.
-func (*openTelemetryTracer) ExtractSpanInfo(ctx context.Context) *trace.SpanInfo {
-	if span := oteltrace.SpanFromContext(ctx); span != nil {
-		var traceID, spanID string
+func (*openTelemetryTracer) ExtractSpanInfo(ctx context.Context) trace.SpanInfo {
+	var spanInfo trace.SpanInfo
 
+	if span := oteltrace.SpanFromContext(ctx); span != nil {
 		if span.SpanContext().HasTraceID() {
-			traceID = span.SpanContext().TraceID().String()
+			spanInfo.TraceID = span.SpanContext().TraceID().String()
 		}
 
 		if span.SpanContext().HasSpanID() {
-			spanID = span.SpanContext().SpanID().String()
+			spanInfo.SpanID = span.SpanContext().SpanID().String()
 		}
 
-		return &trace.SpanInfo{
-			TraceID: traceID,
-			SpanID:  spanID,
-		}
 	}
 
-	return nil
+	return spanInfo
+
 }
 
 // HttpClientTrace implements trace.Tracer.
@@ -64,28 +71,27 @@ func (*openTelemetryTracer) StartHttpClientTrace(ctx context.Context, spanName s
 		opt(&options)
 	}
 
-	var (
-		request          = options.Request
-		endpoint, method string
-	)
-
-	if request != nil {
-		endpoint = request.URL.String()
-		method = request.Method
-
-		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(request.Header))
-	}
-
 	tr := otel.Tracer(trace.HTTP_CLIENT)
 
 	if spanName == "" {
 		spanName = "http-client-call"
 	}
 	ctx, span := tr.Start(ctx, spanName, oteltrace.WithSpanKind(oteltrace.SpanKindClient))
-	span.SetAttributes(
-		semconv.HTTPURLKey.String(endpoint),
-		semconv.HTTPMethodKey.String(method),
-	)
+
+	if options.Request != nil {
+		var (
+			request  = options.Request
+			endpoint = request.URL.String()
+			method   = request.Method
+		)
+
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(request.Header))
+
+		span.SetAttributes(
+			semconv.HTTPURLKey.String(endpoint),
+			semconv.HTTPMethodKey.String(method),
+		)
+	}
 
 	return ctx, func(ctx context.Context, opts ...trace.HttpClientTraceFinishOption) {
 		options := trace.HttpClientTraceFinishOptions{}
@@ -237,12 +243,8 @@ func (*openTelemetryTracer) StartInternalTrace(ctx context.Context, spanName str
 }
 
 // Setup global tracing configurations
-func SetGlobalTracer(ctx context.Context, serviceName, exporterEndpoint string) error {
-	client := otlptracehttp.NewClient(
-		otlptracehttp.WithInsecure(),
-		otlptracehttp.WithEndpoint(exporterEndpoint))
-
-	exporter, err := otlptrace.New(ctx, client)
+func (o *openTelemetryTracer) setGlobalTracer(ctx context.Context) error {
+	exporter, err := o.newExporter(ctx)
 	if err != nil {
 		return err
 	}
@@ -251,7 +253,7 @@ func SetGlobalTracer(ctx context.Context, serviceName, exporterEndpoint string) 
 		tracesdk.WithBatcher(exporter),
 		tracesdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(serviceName),
+			semconv.ServiceNameKey.String(o.serviceName),
 		)),
 	)
 
@@ -259,4 +261,21 @@ func SetGlobalTracer(ctx context.Context, serviceName, exporterEndpoint string) 
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
 	return nil
+}
+
+func (o *openTelemetryTracer) newExporter(ctx context.Context) (tracesdk.SpanExporter, error) {
+	httpOptions := make([]otlptracehttp.Option, 0)
+	httpOptions = append(httpOptions, otlptracehttp.WithInsecure())
+
+	if len(o.exporterEndpoint) != 0 {
+		httpOptions = append(httpOptions, otlptracehttp.WithEndpoint(o.exporterEndpoint))
+	}
+
+	client := otlptracehttp.NewClient(httpOptions...)
+	exporter, err := otlptrace.New(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+
+	return exporter, nil
 }
