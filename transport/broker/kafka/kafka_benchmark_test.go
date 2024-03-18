@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"math/rand"
@@ -49,7 +50,7 @@ func BenchmarkKafka(b *testing.B) {
 		b.Fail()
 	}
 
-	_, err = kBroker.Subscribe(requestTopic, func(e broker.Event) error {
+	_, err = kBroker.Subscribe(requestTopic, func(ctx context.Context, e broker.Event) error {
 		msg := e.Message()
 		if msg == nil {
 			return broker.EmptyMessageError{}
@@ -71,7 +72,7 @@ func BenchmarkKafka(b *testing.B) {
 		}
 
 		// pubish to response topic
-		err = kBroker.Publish(replyTopic, &broker.Message{
+		err = kBroker.Publish(context.Background(), replyTopic, &broker.Message{
 			Headers: msg.Headers,
 			Body:    resultByte,
 		})
@@ -90,7 +91,7 @@ func BenchmarkKafka(b *testing.B) {
 
 	b.ResetTimer()
 	round := 500
-	total := 100
+	total := 10
 
 	var totalTime int64
 	var wg sync.WaitGroup
@@ -108,7 +109,7 @@ func BenchmarkKafka(b *testing.B) {
 
 				start := time.Now()
 				b.Logf("Start time: %v", start)
-				msg, err := kBroker.PublishAndReceive(requestTopic, &broker.Message{
+				msg, err := kBroker.PublishAndReceive(context.Background(), requestTopic, &broker.Message{
 					Headers: map[string]string{
 						"correlationId": uuid.New().String(),
 					},
@@ -153,7 +154,7 @@ func TestPublishAndReceived(t *testing.T) {
 		t.Error(err)
 	}
 
-	_, err = kBroker.Subscribe(requestTopic, func(e broker.Event) error {
+	_, err = kBroker.Subscribe(requestTopic, func(ctx context.Context, e broker.Event) error {
 		msg := e.Message()
 		if msg == nil {
 			return broker.EmptyMessageError{}
@@ -175,7 +176,7 @@ func TestPublishAndReceived(t *testing.T) {
 		}
 
 		// pubish to response topic
-		err = kBroker.Publish(replyTopic, &broker.Message{
+		err = kBroker.Publish(context.Background(), replyTopic, &broker.Message{
 			Headers: msg.Headers,
 			Body:    resultByte,
 		})
@@ -200,7 +201,7 @@ func TestPublishAndReceived(t *testing.T) {
 		t.Error(err)
 	}
 
-	msg, err := kBroker.PublishAndReceive(requestTopic, &broker.Message{
+	msg, err := kBroker.PublishAndReceive(context.Background(), requestTopic, &broker.Message{
 		Body: reqByte,
 	},
 		broker.WithPublishReplyToTopic(replyTopic),

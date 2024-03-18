@@ -259,17 +259,17 @@ func (k *kBroker) Options() broker.BrokerOptions {
 	return k.opts
 }
 
-func (k *kBroker) Publish(topic string, msg *broker.Message, opts ...broker.PublishOption) error {
+func (k *kBroker) Publish(ctx context.Context, topic string, msg *broker.Message, opts ...broker.PublishOption) error {
 	options := broker.PublishOptions{}
 
 	for _, opt := range opts {
 		opt(&options)
 	}
 
-	return k.sendMessage(topic, msg)
+	return k.sendMessage(ctx, topic, msg)
 }
 
-func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...broker.PublishOption) (*broker.Message, error) {
+func (k *kBroker) PublishAndReceive(ctx context.Context, topic string, msg *broker.Message, opts ...broker.PublishOption) (*broker.Message, error) {
 	options := broker.PublishOptions{
 		ReplyToTopic: fmt.Sprintf("%s.reply", topic),
 		Timeout:      RequestReplyTimeout,
@@ -287,7 +287,7 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 		msgChan            = make(chan *broker.Message, 1)
 	)
 
-	err := k.sendMessage(topic, msg)
+	err := k.sendMessage(ctx, topic, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +307,7 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 				subOpts = append(subOpts, broker.WithSubscribeGroup(replyConsumerGroup))
 			}
 
-			_, err := k.Subscribe(replyTopic, func(e broker.Event) error {
+			_, err := k.Subscribe(replyTopic, func(ctx context.Context, e broker.Event) error {
 				go func() {
 					if e.Message() == nil {
 						return
@@ -347,7 +347,7 @@ func (k *kBroker) PublishAndReceive(topic string, msg *broker.Message, opts ...b
 	}
 }
 
-func (k *kBroker) sendMessage(topic string, msg *broker.Message) error {
+func (k *kBroker) sendMessage(ctx context.Context, topic string, msg *broker.Message) error {
 	kMsg, err := k.codec.Marshal(topic, msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal to kafka message: %w", err)

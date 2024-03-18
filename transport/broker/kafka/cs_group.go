@@ -51,14 +51,14 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 
 			p := &publication{m: m, t: msg.Topic, km: msg, cg: h.cg, sess: session}
 
-			err = h.handler(p)
+			err = h.handler(ctx, p)
 			if err == nil && h.subopts.AutoAck {
 				session.MarkMessage(msg, "")
 			} else if err != nil {
 				p.err = err
 				errHandler := h.kopts.ErrorHandler
 				if errHandler != nil {
-					errHandler(p)
+					errHandler(ctx, p)
 				} else {
 					h.logger.Errorf(ctx, "[kafka] subscriber error: %v", err)
 				}
